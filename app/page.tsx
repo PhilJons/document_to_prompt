@@ -1,137 +1,170 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { processDocumentsAction } from '@/actions/processDocuments';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DocumentUploadForm } from '@/components/DocumentUploadForm';
 import { ResultDisplay } from '@/components/ResultDisplay';
-import Image from 'next/image'; // Keep if needed for branding
+import { processDocumentsAction, getDefaultAnalysisPrompt } from '@/actions/processDocuments'; 
+import { Button } from "@/components/ui/button"; // Assuming Button is used
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Terminal } from "lucide-react"
+import SystemPromptEditor from '@/components/SystemPromptEditor'; // Import the editor
 
-const OPTIMISTIC_INTERVAL_MS = 2000; // ~2 seconds per file (adjust as needed)
+// Assuming SystemPromptEditor component will be created later
+// import SystemPromptEditor from '@/components/SystemPromptEditor';
 
 export default function Home() {
-  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [processedText, setProcessedText] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [totalFilesToProcess, setTotalFilesToProcess] = useState<number>(0);
-  const [currentFileIndex, setCurrentFileIndex] = useState<number>(0);
-  const [currentFileName, setCurrentFileName] = useState<string>("");
-  const [isFinalizing, setIsFinalizing] = useState<boolean>(false);
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [currentFileName, setCurrentFileName] = useState("");
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
 
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // State for the analysis prompt template
+  const [analysisPromptTemplate, setAnalysisPromptTemplate] = useState<string>("");
+  const [promptLoading, setPromptLoading] = useState(true);
+  const [promptError, setPromptError] = useState<string | null>(null);
 
-  // Cleanup interval on component unmount
+  // State for the editor popup
+  const [isPromptEditorOpen, setIsPromptEditorOpen] = useState(false);
+
+  // Fetch the default prompt on component mount
   useEffect(() => {
-    return () => {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
+    async function fetchPrompt() {
+      try {
+        setPromptLoading(true);
+        const defaultPrompt = await getDefaultAnalysisPrompt();
+        setAnalysisPromptTemplate(defaultPrompt);
+        setPromptError(null);
+      } catch (err) {
+        console.error("Failed to fetch default prompt:", err);
+        setPromptError("Could not load the default analysis prompt.");
+        setAnalysisPromptTemplate("Error loading prompt..."); // Placeholder on error
+      } finally {
+        setPromptLoading(false);
       }
-    };
-  }, []);
-
-  // Function to safely clear interval
-  const stopProgressInterval = () => {
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
-      progressIntervalRef.current = null;
     }
-  };
+    fetchPrompt();
+  }, []); // Empty dependency array ensures this runs only once on mount
 
-  const handleUpload = async (formData: FormData) => {
+  // This handler now needs to align with DocumentUploadForm's output
+  // Assuming DocumentUploadForm calls an onSubmit prop with FormData
+  const handleUploadSubmit = async (formData: FormData) => {
     const files = formData.getAll("files") as File[];
-    if (files.length === 0) return;
-
-    const fileNames = files.map(f => f.name);
-    setTotalFilesToProcess(files.length);
-    setCurrentFileIndex(0);
-    setCurrentFileName(fileNames[0] || "");
-    setIsLoading(true);
-    setIsFinalizing(false);
-    setError(null);
+    if (files.length === 0) {
+       setError("No files submitted.");
+       return;
+    } 
+    // Set state based on the submitted files
+    setUploadedFiles(files);
     setProcessedText(null);
+    setError(null);
+    setTotalFiles(files.length);
+    setCurrentFileIndex(0);
+    setCurrentFileName(files.length > 0 ? files[0].name : "");
+    setIsFinalizing(false); 
 
-    stopProgressInterval(); // Clear previous interval if any
-
-    // Start optimistic progress interval
-    progressIntervalRef.current = setInterval(() => {
-      setCurrentFileIndex((prevIndex) => {
-        const nextIndex = prevIndex + 1;
-        if (nextIndex < files.length) {
-          // Still within the optimistic per-file count
-          setCurrentFileName(fileNames[nextIndex] || "");
-          return nextIndex;
-        } else {
-          // Reached the end of optimistic count
-          stopProgressInterval(); // Stop the interval
-          setIsFinalizing(true); // Switch to finalizing state
-          return prevIndex; // Keep index at the last file
-        }
-      });
-    }, OPTIMISTIC_INTERVAL_MS);
-
-    console.log("Calling server action for analysis...");
-    try {
-      const result = await processDocumentsAction(formData);
-      console.log("Server action analysis result:", result);
-
-      if (result.success) {
-        setProcessedText(result.analysis || "");
-      } else {
-        setError(result.error || 'An unknown error occurred during analysis.');
-      }
-    } catch (uploadError) {
-        console.error("Upload/Processing Error:", uploadError);
-        setError("An unexpected error occurred during processing.")
-    } finally {
-        stopProgressInterval(); // Ensure interval is stopped
-        setIsLoading(false);
-        setIsFinalizing(false); // Reset finalizing state
-        // Optional: Reset progress state fully here if needed
-        // setTotalFilesToProcess(0);
-        // setCurrentFileIndex(0);
-        // setCurrentFileName("");
-    }
+    // Immediately proceed to analysis after form gives us the FormData
+    await performAnalysis(formData);
   };
+
+  // Extracted analysis logic to be called after getting FormData
+  const performAnalysis = async (formData: FormData) => {
+    setIsLoading(true);
+    // Optional: remove the simulated progress loop if form handles it?
+    // Or keep it if the form only gives files, not submits them
+    setIsFinalizing(true); // Go straight to finalizing/analysis
+
+    try {
+      const result = await processDocumentsAction(formData, analysisPromptTemplate);
+      if (result.success && result.analysis) {
+        setProcessedText(result.analysis);
+        setError(null);
+      } else {
+        setError(result.error || "An unknown error occurred.");
+        setProcessedText(null);
+      }
+    } catch (err: any) {
+      console.error("Analysis error:", err);
+      setError(`An unexpected error occurred during analysis: ${err.message || "Unknown error"}`);
+      setProcessedText(null);
+    } finally {
+      setIsLoading(false);
+      setIsFinalizing(false); 
+    }
+  }
 
   return (
-    <div className="flex flex-col items-center min-h-screen p-8 sm:p-12 font-[family-name:var(--font-geist-sans)]">
-      <header className="mb-10 text-center">
-        {/* Optional: Add a logo or branding if desired */}
-        {/* <Image
-          className="dark:invert mx-auto mb-4"
-          src="/your-logo.svg"
-          alt="App Logo"
-          width={180}
-          height={38}
-          priority
-        /> */}
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl">
-          Document Analysis Engine
+    <main className="flex min-h-screen flex-col items-center justify-start p-6 sm:p-12 md:p-24 bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-900 dark:to-blue-900/30">
+      <div className="w-full max-w-4xl bg-white dark:bg-gray-800 shadow-xl rounded-lg p-8 border border-gray-200 dark:border-gray-700">
+        
+        <h1 className="text-3xl font-bold mb-2 text-center text-gray-800 dark:text-gray-100">
+          Quarterly Report Analysis Synthesis
         </h1>
-        <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">
-          Upload PDF research reports for AI-driven analysis of trends over time.
+        <p className="text-center text-gray-600 dark:text-gray-400 mb-6">
+          Upload multiple quarterly equity research PDF reports to analyze and synthesize their evolution.
         </p>
-      </header>
 
-      <main className="w-full flex flex-col items-center gap-8">
-        {/* Document Upload Form */}
-        <DocumentUploadForm onSubmit={handleUpload} isLoading={isLoading} />
+        {/* Prompt Loading/Error State */}
+        {promptLoading && <p className="text-center text-sm text-gray-500 dark:text-gray-400 my-2">Loading analysis prompt...</p>}
+        {promptError && (
+          <Alert variant="destructive" className="my-4">
+            <Terminal className="h-4 w-4" />
+            <AlertTitle>Prompt Error</AlertTitle>
+            <AlertDescription>{promptError}</AlertDescription>
+          </Alert>
+        )}
 
-        {/* Result Display Area */}
-        <ResultDisplay
-          processedText={processedText}
-          isLoading={isLoading}
-          error={error}
-          totalFiles={totalFilesToProcess}
-          currentFileIndex={currentFileIndex}
-          currentFileName={currentFileName}
-          isFinalizing={isFinalizing}
+        {/* Button to open prompt editor */}
+        <div className="flex justify-end mb-4">
+           <Button 
+             variant="outline" 
+             size="sm" 
+             onClick={() => setIsPromptEditorOpen(true)}
+             disabled={promptLoading || !!promptError} // Disable if loading or error
+           >
+             Edit Analysis Prompt
+           </Button>
+        </div> 
+
+        {/* Replace FileUploader usage with DocumentUploadForm */}
+        {/* Pass the new handleUploadSubmit handler */}
+        {/* Remove the separate form tag and submit button if DocumentUploadForm includes them */}
+        <DocumentUploadForm 
+           onSubmit={handleUploadSubmit} 
+           isLoading={isLoading} 
+           // Pass other necessary props based on DocumentUploadForm's definition
         />
-      </main>
+        
+        {(error || processedText || isLoading) && (
+          <div className="mt-8 w-full">
+            <ResultDisplay
+              processedText={processedText}
+              isLoading={isLoading}
+              error={error}
+              totalFiles={totalFiles}
+              currentFileIndex={currentFileIndex}
+              currentFileName={currentFileName}
+              isFinalizing={isFinalizing}
+            />
+          </div>
+        )}
+      </div>
 
-      <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
-        {/* Optional footer content */}
-        Powered by Azure Document Intelligence & Azure OpenAI
-      </footer>
-    </div>
+      {/* Prompt Editor Modal */}
+      {isPromptEditorOpen && (
+        <SystemPromptEditor
+          isOpen={isPromptEditorOpen}
+          onClose={() => setIsPromptEditorOpen(false)}
+          currentPrompt={analysisPromptTemplate} // Pass the prompt from state
+          onSave={(newPrompt) => {
+            setAnalysisPromptTemplate(newPrompt); // Update state on save
+          }}
+        />
+      )} 
+
+    </main>
   );
 }

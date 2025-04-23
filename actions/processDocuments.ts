@@ -78,7 +78,20 @@ function formatTableToMarkdown(table: DocumentTable): string {
   return markdown + "\n"; // Add extra newline for spacing
 }
 
-export async function processDocumentsAction(formData: FormData): Promise<{
+// Default analysis prompt string (extracted for reusability)
+const DEFAULT_ANALYSIS_PROMPT_TEMPLATE = `**Your Role:** You are an Expert Financial Analyst AI Assistant specializing in synthesizing quarterly equity research reports.\n\n**Primary Objective:** Analyze the following CONCISELY EXTRACTED data from multiple quarterly equity research reports (potentially from different research houses like ABG Sundal Collier, etc., for a company like Hexpol). Your core task is to identify and summarize **how the main messages, sentiment, recommendations, and key estimates from EACH DISTINCT research house have EVOLVED across the different quarters** represented.\n\n**Input Data Format:** The input consists of concatenated summaries from multiple files. Each file summary starts with \`## File: [Filename]\`, includes page count, and contains \`### Extracted Tables\` formatted in Markdown, separated by \`---\`. **Focus your analysis PRIMARILY on the tables**, as they often contain the key recommendations, target prices, and estimate changes. Use filenames and table context to infer dates/quarters and research houses if possible.\n\n**Analysis & Output:**\n1.  Group findings by **Research House**.\n2.  Within each house, present findings **chronologically** (by inferred quarter/date).\n3.  For each report/quarter per house, summarize: **Recommendation, Target Price, Key Estimate Trends, and overall Sentiment.**\n4.  Conclude each research house section with a paragraph summarizing the **Overall Evolution** of their view.\n5.  Structure the output clearly using Markdown.\n6.  **Be concise and analytical.** Focus on the *changes* and *trends* over time per source.\n7.  Base analysis **only** on the provided text. If source/date is unclear, state that.\n\n**Analyze the following data:**\n\n{{CONCISE_DOCUMENTS_DATA}}`; // Using a placeholder
+
+// New Server Action to get the default prompt
+export async function getDefaultAnalysisPrompt(): Promise<string> {
+  // In a real app, this might read from a config file or DB
+  // For now, return the template string (without data interpolated)
+  return DEFAULT_ANALYSIS_PROMPT_TEMPLATE.replace('{{CONCISE_DOCUMENTS_DATA}}', '{CONCISE_DOCUMENTS_DATA}'); // Return template placeholder
+}
+
+export async function processDocumentsAction(
+  formData: FormData, 
+  customAnalysisPromptTemplate?: string // Optional: Accept custom prompt template
+): Promise<{
   success: boolean;
   analysis?: string;
   error?: string;
@@ -164,8 +177,13 @@ export async function processDocumentsAction(formData: FormData): Promise<{
   }
 
   // --- Step 2: Analyze with Azure OpenAI using Vercel AI SDK --- 
-  const analysisPrompt = `**Your Role:** You are an Expert Financial Analyst AI Assistant specializing in synthesizing quarterly equity research reports.\n\n**Primary Objective:** Analyze the following CONCISELY EXTRACTED data from multiple quarterly equity research reports (potentially from different research houses like ABG Sundal Collier, etc., for a company like Hexpol). Your core task is to identify and summarize **how the main messages, sentiment, recommendations, and key estimates from EACH DISTINCT research house have EVOLVED across the different quarters** represented.\n\n**Input Data Format:** The input consists of concatenated summaries from multiple files. Each file summary starts with \`## File: [Filename]\`, includes page count, and contains \`### Extracted Tables\` formatted in Markdown, separated by \`---\`. **Focus your analysis PRIMARILY on the tables**, as they often contain the key recommendations, target prices, and estimate changes. Use filenames and table context to infer dates/quarters and research houses if possible.\n\n**Analysis & Output:**\n1.  Group findings by **Research House**.\n2.  Within each house, present findings **chronologically** (by inferred quarter/date).\n3.  For each report/quarter per house, summarize: **Recommendation, Target Price, Key Estimate Trends, and overall Sentiment.**\n4.  Conclude each research house section with a paragraph summarizing the **Overall Evolution** of their view.\n5.  Structure the output clearly using Markdown.\n6.  **Be concise and analytical.** Focus on the *changes* and *trends* over time per source.\n7.  Base analysis **only** on the provided text. If source/date is unclear, state that.\n\n**Analyze the following data:**\n\n${conciseDocumentsData}`;
-
+  
+  // Use the custom prompt if provided, otherwise use the default
+  const analysisPromptTemplateToUse = customAnalysisPromptTemplate || DEFAULT_ANALYSIS_PROMPT_TEMPLATE;
+  
+  // Inject the extracted data into the chosen template
+  const analysisPrompt = analysisPromptTemplateToUse.replace('{{CONCISE_DOCUMENTS_DATA}}', conciseDocumentsData);
+  
   console.log("Step 2: Starting AI analysis...");
 
   // --- DEBUG: Log environment variables --- 
