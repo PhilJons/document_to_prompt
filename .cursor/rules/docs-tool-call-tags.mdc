@@ -1,0 +1,96 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+<stories_for_the_implementation>
+Okay, translating the technical plan into user stories helps ensure we're aligned on the end-user experience. Here's a list of user stories derived from the plan:
+
+**Core File Upload & Viewing:**
+
+1.  **As a user, I want to** click an "Attach File" button in the chat input area **so that** I can select files from my device to upload.
+2.  **As a user, I want to** drag and drop files directly onto the chat input area **so that** I can easily add files to my message.
+3.  **As a user, I want to** see a preview of the files I've selected/dropped in the chat input area before sending the message **so that** I know which files are staged for upload.
+4.  **As a user, I want to** remove a file from the preview area before sending the message **so that** I can correct mistakes if I select the wrong file.
+5.  **As a user, I want to** send a chat message that includes both text and one or more attached files **so that** I can provide context or documents alongside my query.
+6.  **As a user, I want to** see my uploaded attachments displayed clearly within the chat history, associated with the message I sent them with, **so that** I can track the files I've shared.
+7.  **As a user, I want to** see the filename and an appropriate icon (based on file type) for each attachment in the chat history **so that** I can easily identify the files.
+8.  **As a user, I want to** click on an attachment in the chat history **so that** I can download the original file I uploaded.
+
+**Background Processing & Status:**
+
+9.  **As a user, I want** the system to automatically process supported uploaded files (like PDFs, Word docs, images) in the background **so that** the text content can be extracted for the AI to use later without delaying my chat interaction.
+10. **As a user, I want to** see a visual indicator on an attachment in the chat history showing if it's still being processed **so that** I know its content might not be ready for the AI yet.
+11. **As a user, I want to** see a visual indicator if the system failed to process an attachment **so that** I understand why the AI might not be able to access its content.
+
+**AI Interaction with Files:**
+
+12. **As a user, I want** the AI assistant to be aware that I have uploaded specific files with my message **so that** it knows additional context is available.
+13. **As a user, I want to** ask the AI questions *about* the content of a specific uploaded (and successfully processed) document (e.g., "What does the attached report say about Q3 earnings?") **so that** I can get information directly from my documents via the chat interface.
+14. **As a user, I want** the AI assistant to inform me if it tries to access an attachment that is still processing **so that** I understand the delay.
+15. **As a user, I want** the AI assistant to inform me if it tries to access an attachment that failed processing (or is an unsupported type for extraction) **so that** I know why it cannot answer questions about that specific file's content.
+
+**File Management:**
+
+16. **As a user, I want to** be able to delete an attachment I previously uploaded to a chat message **so that** I can remove files that are no longer relevant or were uploaded by mistake.
+
+**System/Admin Perspective (Implicit):**
+
+17. **As an administrator/system, I want** file uploads to be stored securely in a private Azure Blob Storage container **so that** user data is protected.
+18. **As an administrator/system, I want** file metadata and extracted text to be stored efficiently in the database **so that** it can be easily queried and managed.
+19. **As an administrator/system, I want** access to download original files to be controlled via short-lived secure links (SAS URLs) **so that** direct access to private storage is not exposed.
+20. **As an administrator/system, I want** limits on file size and allowed file types to be enforced **so that** storage usage and processing load are manageable and security risks are reduced.
+
+</stories_for_the_implementation>
+
+<dev_thinking_tag>
+<!-- ============================================================
+  DEVELOPER THINKING GUIDE  –  Embed this at the top of every section
+  You are an AI-developer agent with tool access (`file_search`, etc.)
+=============================================================== -->
+
+### 0 Your Role
+
+You own the implementation of **this section only**.  
+Speak in first-person to the **Project Manager (PM)** for clarifications.  
+Use tool calls liberally to inspect the repo *before* you decide anything.  
+Document your reasoning with a **short bullet Chain-of-Thought (CoT)** in the PR,
+mirroring the “getting-ahead-of-myself just to double-check” mentality.
+
+---
+
+### 1 Checklist Before You Start Implementing
+
+1. Run an **“insanely well-analysed” code scan** of files relevant to this section.  
+   *Example tool call:* `file_search` for `"Attachment"` schema.
+2. Re-read the **Goals** at the top of this section.  
+3. Note all **Dependencies**; ping upstream devs if anything is unclear.  
+4. Confirm your **Out-of-scope** list—add items if missing.  
+5. Post a quick *“Ready to implement”* message to the PM.
+
+---
+
+### 2 Developer Mindset Checklist  
+*(follow in order; examples show how to apply each step)*
+
+| # | Instruction | Concrete Example |
+|---|-------------|------------------|
+| **1** | **Begin with an “insanely well-analysed” mini-audit** of the code for this section. | “Scanned `prisma/schema.prisma` & `src/lib/actions`. No existing `processingStatus` enum—will add.” |
+| **2** | **Restate the Goals** in one sentence. | “Goal: Persist extracted text so chat retrieval avoids live blob reads.” |
+| **3** | **List 2–3 concrete Deliverables**. | “1) Prisma migration · 2) `getAttachmentContentAction` refactor · 3) Unit tests.” |
+| **4** | **Write a terse Chain-of-Thought** explaining *why* this design wins. | “Inline extraction too slow; DI async queue chosen—scales & isolates errors.” |
+| **5** | **Flag Out-of-scope items**. | “Beyond scope: front-end polling UI.” |
+| **6** | **Declare Dependencies** on other sections. | “Needs new `extractedContent` column from DB section (Dev A).” |
+| **7** | **Publish a lightweight Contract** for every cross-section touch-point. | “Queue msg JSON ⇒ `{ attachmentId: string }`.” |
+| **8** | **Set one Communication Trigger**. | “After migration merged to `main`, ping Dev B to start queue worker.” |
+| **9** | **Raise Blockers immediately** when a dependency slips. | “DI API key missing in staging — blocker reported to PM.” |
+| **10** | **Update the Chain-of-Thought** if you diverge from plan. | “Switched from Azure Queue to Service Bus; wrote trade-off note.” |
+| **11** | **Notify downstream developers** when deliverables are live. | “Posted in #backend: migration deployed, table ready.” |
+| **12** | **Version-control all rationale and contracts** alongside code. | “Committed `docs/contracts/doc-extract-msg.md` with schema & reasoning.” |
+
+> **Follow the checklist exactly.**  
+> Return to the PM with progress updates or questions anytime.  
+> Implementation is complete only when every Deliverable is merged
+> and downstream devs have confirmed zero blockers.
+
+</dev_thinking_tag>

@@ -13,6 +13,8 @@ interface ResultDisplayProps {
   currentFileIndex: number;
   currentFileName: string;
   isFinalizing: boolean;
+  currentStatusMessage?: string | null;
+  progressPercent?: number;
 }
 
 export function ResultDisplay({
@@ -23,9 +25,12 @@ export function ResultDisplay({
   currentFileIndex,
   currentFileName,
   isFinalizing,
+  currentStatusMessage,
+  progressPercent,
 }: ResultDisplayProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingTxt, setIsDownloadingTxt] = useState(false);
   const analysisContentRef = useRef<HTMLDivElement>(null); // Ref to capture the content area
 
   const handleCopy = async () => {
@@ -127,8 +132,32 @@ export function ResultDisplay({
     }
   };
 
+  const handleDownloadTxt = async () => {
+    if (!processedText) return;
+    setIsDownloadingTxt(true);
+
+    try {
+      const textBlob = new Blob([processedText], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(textBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'analysis-result.txt');
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Error downloading TXT:", err);
+      alert(`Failed to download .txt: ${err.message}`);
+    } finally {
+      setIsDownloadingTxt(false);
+    }
+  };
+
   // Calculate optimistic progress percentage
-  const progressPercent = totalFiles > 0 ? Math.min(100, Math.round(((currentFileIndex + 1) / totalFiles) * 100)) : 0;
+  const optimisticProgress = totalFiles > 0 ? Math.min(100, Math.round(((currentFileIndex + 1) / totalFiles) * 100)) : 0;
+  // Use backend progress if available, otherwise fallback to optimistic or just the file count progress
+  const displayProgressPercent = progressPercent !== undefined ? progressPercent : optimisticProgress;
 
   return (
     <div className="w-full max-w-4xl mt-8">
@@ -148,7 +177,7 @@ export function ResultDisplay({
                 className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full mb-2"
               ></motion.div>
               <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
-                Analyzing results...
+                {currentStatusMessage || 'Analyzing results...'}
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-400">
                 Please wait while we process the extracted data.
@@ -168,18 +197,41 @@ export function ResultDisplay({
               <p className="text-sm text-gray-500 dark:text-gray-400 truncate w-full text-center px-4">
                 {currentFileName}
               </p>
+              {currentStatusMessage && (
+                <p className="text-xs text-sky-600 dark:text-sky-400 mt-1 text-center px-2">
+                  {currentStatusMessage}
+                </p>
+              )}
               {/* Progress Bar */}
-              <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2.5 overflow-hidden">
+              <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2.5 overflow-hidden mt-2">
                 <motion.div
                   className="bg-blue-600 h-2.5 rounded-full"
                   initial={{ width: '0%' }}
-                  animate={{ width: `${progressPercent}%` }}
-                  transition={{ duration: 0.5, ease: "easeInOut" }} // Smooth animation
+                  animate={{ width: `${displayProgressPercent}%` }}
+                  transition={{ duration: 0.5, ease: "easeInOut" }}
                 />
               </div>
-              <p className="text-sm font-semibold text-blue-700 dark:text-blue-400">{progressPercent}%</p>
+              <p className="text-sm font-semibold text-blue-700 dark:text-blue-400">{displayProgressPercent}%</p>
             </motion.div>
-          ) : null
+          ) : (
+            // Fallback for initial loading state before file count is known, or if only one file and no per-file updates
+            <motion.div
+              key="initial-loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center p-6 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800/50 space-y-3"
+            >
+                <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                    className="w-6 h-6 border-4 border-blue-500 border-t-transparent rounded-full mb-2"
+                ></motion.div>
+                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">
+                    {currentStatusMessage || 'Processing...'}
+                </p>
+            </motion.div>
+            )
         )}
 
         {error && !isLoading && (
@@ -213,10 +265,17 @@ export function ResultDisplay({
               </button>
               <button
                 onClick={handleDownloadPdf}
-                disabled={isDownloading}
+                disabled={isDownloading || isDownloadingTxt}
                 className="px-3 py-1 text-xs font-medium rounded transition-colors duration-200 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
               >
                 {isDownloading ? 'Downloading...' : 'Download PDF'}
+              </button>
+              <button
+                onClick={handleDownloadTxt}
+                disabled={isDownloadingTxt || isDownloading}
+                className="px-3 py-1 text-xs font-medium rounded transition-colors duration-200 bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {isDownloadingTxt ? 'Downloading...' : 'Download .txt'}
               </button>
             </div>
             <div 

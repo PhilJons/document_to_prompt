@@ -20,9 +20,15 @@ export function DocumentUploadForm({ onSubmit, isLoading }: DocumentUploadFormPr
     onDrop,
     accept: {
       'application/pdf': ['.pdf'],
-      // Add other acceptable types if needed
-      // 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-      // 'text/plain': ['.txt'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/bmp': ['.bmp'],
+      'image/tiff': ['.tif', '.tiff'],
+      // 'image/heic': ['.heic', '.heif'], // HEIC might need more specific handling or library support on client/server
+      // Add other types Document Intelligence supports as needed, e.g., text/html, etc.
     },
   });
 
@@ -59,10 +65,10 @@ export function DocumentUploadForm({ onSubmit, isLoading }: DocumentUploadFormPr
           <p className="text-blue-600 dark:text-blue-400">Drop the files here ...</p>
         ) : (
           <p className="text-gray-500 dark:text-gray-400 text-center">
-            Drag & drop PDF files here, or click to select files
+            Drag & drop PDF, Word, Excel, PowerPoint, or image files here, or click to select files
           </p>
         )}
-         <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Accepts PDF files</p>
+         <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Accepts PDF, DOCX, XLSX, PPTX, JPG, PNG, BMP, TIFF</p>
       </div>
 
       <AnimatePresence>

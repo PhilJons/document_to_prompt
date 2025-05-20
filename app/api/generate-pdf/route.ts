@@ -4,6 +4,9 @@ import { marked } from 'marked'; // Use ESM import for marked
 import path from 'path';
 import fs from 'fs/promises'; // Use promises API for async file reading
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   let browser = null; // Define browser outside try block for finally clause
 
