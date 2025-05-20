@@ -1,38 +1,30 @@
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/authOptions";
 import prisma from "@/lib/prisma";
 import { NextRequest, NextResponse } from "next/server";
 
-// Context might not be strictly needed if we parse ID from URL but kept for consistency if other params were added.
-interface HandlerContext {
-    params: {
-        promptId: string; // This will be ignored if we successfully parse from URL
-    }
+interface RouteParams {
+  promptId: string;
 }
 
-// It's common to define params type directly in the handler arguments for clarity
-// interface RouteParams {
-//   params: {
-//     promptId: string;
-//   };
-// }
+interface RouteProps {
+  params: Promise<RouteParams>; // params is now a Promise
+}
 
 // PUT /api/prompts/[promptId] - Update an existing prompt
-export async function PUT(req: NextRequest, context: HandlerContext) {
-  const pathname = req.nextUrl.pathname;
-  const segments = pathname.split('/');
-  const promptIdFromUrl = segments.pop(); // Get the last segment, which should be the ID
-
+export async function PUT(req: NextRequest, context: RouteProps) {
+  const resolvedParams = await context.params; // Await context.params
+  const { promptId } = resolvedParams;
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!promptIdFromUrl || isNaN(parseInt(promptIdFromUrl))) {
-    return NextResponse.json({ error: "Invalid prompt ID from URL" }, { status: 400 });
+  if (!promptId || isNaN(parseInt(promptId))) {
+    return NextResponse.json({ error: "Invalid prompt ID" }, { status: 400 });
   }
-  const idAsInt = parseInt(promptIdFromUrl);
+  const idAsInt = parseInt(promptId);
 
   try {
     const { name, content } = await req.json();
@@ -79,7 +71,7 @@ export async function PUT(req: NextRequest, context: HandlerContext) {
     });
     return NextResponse.json(updatedPrompt);
   } catch (error: any) {
-    console.error(`Error updating prompt ${promptIdFromUrl}:`, error);
+    console.error(`Error updating prompt ${promptId}:`, error);
      if (error.code === 'P2002' && error.meta?.target?.includes('name') && error.meta?.target?.includes('userId')) {
         return NextResponse.json({ error: `A prompt with the name already exists for this user.` }, { status: 409 });
     } 
@@ -88,21 +80,19 @@ export async function PUT(req: NextRequest, context: HandlerContext) {
 }
 
 // DELETE /api/prompts/[promptId] - Delete a prompt
-export async function DELETE(req: NextRequest, context: HandlerContext) {
-  const pathname = req.nextUrl.pathname;
-  const segments = pathname.split('/');
-  const promptIdFromUrl = segments.pop(); // Get the last segment
-
+export async function DELETE(req: NextRequest, context: RouteProps) {
+  const resolvedParams = await context.params; // Await context.params
+  const { promptId } = resolvedParams;
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!promptIdFromUrl || isNaN(parseInt(promptIdFromUrl))) {
-    return NextResponse.json({ error: "Invalid prompt ID from URL" }, { status: 400 });
+  if (!promptId || isNaN(parseInt(promptId))) {
+    return NextResponse.json({ error: "Invalid prompt ID" }, { status: 400 });
   }
-  const idAsInt = parseInt(promptIdFromUrl);
+  const idAsInt = parseInt(promptId);
 
   try {
     const promptToDelete = await prisma.prompt.findUnique({
@@ -124,7 +114,7 @@ export async function DELETE(req: NextRequest, context: HandlerContext) {
     });
     return NextResponse.json({ message: "Prompt deleted successfully" }, { status: 200 });
   } catch (error) {
-    console.error(`Error deleting prompt ${promptIdFromUrl}:`, error);
+    console.error(`Error deleting prompt ${promptId}:`, error);
     return NextResponse.json({ error: "Failed to delete prompt" }, { status: 500 });
   }
 } 

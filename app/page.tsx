@@ -446,21 +446,33 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col items-center min-h-screen p-8 sm:p-12 font-[family-name:var(--font-geist-sans)]">
-      <header className="mb-10 text-center w-full relative">
-        <div className="absolute top-0 right-0 p-4 sm:p-6">
-          <AuthButton />
+    <div className="flex flex-col items-center min-h-screen p-8 sm:p-24 pt-24 font-[family-name:var(--font-geist-sans)] relative">
+      <div className="fixed top-4 right-4 z-50">
+        <AuthButton />
+      </div>
+
+      <header className="mb-10 text-center w-full">
+        {/* Aura Logos - Conditional rendering for dark mode */}
+        <div className="mx-auto mb-6" style={{ maxWidth: '200px' }}> {/* Added a wrapper for sizing and centering */}
+          <Image 
+            src="/Aura_logo.svg" 
+            alt="Aura Logo" 
+            width={150} 
+            height={44} // Adjust height based on aspect ratio of 150 width
+            className="mx-auto block dark:hidden"
+            priority 
+          />
+          <Image 
+            src="/Aura_logo_white.svg" 
+            alt="Aura Logo" 
+            width={150} 
+            height={44} // Adjust height based on aspect ratio of 200 width
+            className="mx-auto hidden dark:block"
+            priority
+          />
         </div>
-        {/* Optional: Add a logo or branding if desired */}
-        {/* <Image
-          className="dark:invert mx-auto mb-4"
-          src="/your-logo.svg"
-          alt="App Logo"
-          width={180}
-          height={38}
-          priority
-        /> */}
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl pt-16 sm:pt-12">
+        
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-4xl">
           Document Analysis Engine
         </h1>
         <p className="mt-2 text-lg text-gray-600 dark:text-gray-400">
@@ -476,7 +488,6 @@ export default function Home() {
       </header>
 
       <main className="w-full flex flex-col items-center gap-8">
-        {/* Optional User Input Box */}
         <div className="w-full max-w-2xl">
           <label htmlFor="optional-user-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
             Optional User Input (provide additional context or specific instructions for the AI):
@@ -495,10 +506,8 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Document Upload Form */}
         <DocumentUploadForm onSubmit={handleUpload} isLoading={isLoading || sessionStatus === 'loading'} />
 
-        {/* Options Panel Modal */}
         {isOptionsModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 sm:p-6">
             <div className="relative bg-white dark:bg-gray-800 p-0 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
@@ -518,7 +527,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Result Display Area */}
         <ResultDisplay
           processedText={processedText}
           isLoading={isLoading}
@@ -533,7 +541,6 @@ export default function Home() {
       </main>
 
       <footer className="mt-12 text-center text-sm text-gray-500 dark:text-gray-400">
-        {/* Optional footer content */}
         Powered by Azure Document Intelligence & Azure OpenAI
       </footer>
     </div>
