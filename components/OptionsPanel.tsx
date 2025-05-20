@@ -5,6 +5,7 @@ import { structureUserInputsIntoSystemPromptAction } from '@/actions/structureUs
 import { motion } from 'framer-motion';
 
 interface SystemPrompt {
+  id: number;
   name: string;
   content: string;
 }
@@ -19,6 +20,7 @@ interface OptionsPanelProps {
   defaultPromptNames: string[];
   isLoading: boolean;
   onClose: () => void;
+  isUserLoggedIn: boolean;
 }
 
 export function OptionsPanel({
@@ -31,10 +33,12 @@ export function OptionsPanel({
   defaultPromptNames,
   isLoading,
   onClose,
+  isUserLoggedIn,
 }: OptionsPanelProps) {
   const [newPromptName, setNewPromptName] = useState('');
   const [newPromptContent, setNewPromptContent] = useState('');
   const [editingPromptOriginalName, setEditingPromptOriginalName] = useState<string | null>(null);
+  const [editingPromptId, setEditingPromptId] = useState<number | null>(null);
   const [isGeneratingAiPrompt, setIsGeneratingAiPrompt] = useState(false);
   const [aiGenerationError, setAiGenerationError] = useState<string | null>(null);
 
@@ -63,38 +67,56 @@ export function OptionsPanel({
       if (promptToEdit) {
         setNewPromptName(promptToEdit.name);
         setNewPromptContent(promptToEdit.content);
+        setEditingPromptId(promptToEdit.id);
       } else {
-        setEditingPromptOriginalName(null);
+        handleCancelEdit();
       }
     }
   }, [editingPromptOriginalName, systemPrompts]);
 
   const handleAddOrUpdatePrompt = () => {
+    if (!isUserLoggedIn) {
+      alert("Please log in to manage prompts.");
+      return;
+    }
     if (newPromptName.trim() && newPromptContent.trim()) {
-      if (editingPromptOriginalName) {
+      if (editingPromptOriginalName && editingPromptId !== null) {
         onUpdatePrompt(editingPromptOriginalName, newPromptName.trim(), newPromptContent.trim());
-        setEditingPromptOriginalName(null);
       } else {
         onAddNewPrompt(newPromptName.trim(), newPromptContent.trim());
       }
-      setNewPromptName('');
-      setNewPromptContent('');
+      handleCancelEdit();
     } else {
       alert('Please provide both a name and content for the prompt.');
     }
   };
 
   const handleSelectPromptForEditing = (prompt: SystemPrompt) => {
+    if (!isUserLoggedIn) return;
     setEditingPromptOriginalName(prompt.name);
+    setEditingPromptId(prompt.id);
   };
 
   const handleCancelEdit = () => {
     setEditingPromptOriginalName(null);
+    setEditingPromptId(null);
     setNewPromptName('');
     setNewPromptContent('');
   };
 
+  const handleDelete = (promptName: string) => {
+    if (!isUserLoggedIn) {
+      alert("Please log in to delete prompts.");
+      return;
+    }
+    onDeletePrompt(promptName);
+  };
+
   const handleGenerateWithAi = async () => {
+    if (!isUserLoggedIn) {
+      alert("Please log in to use AI features for prompts.");
+      return;
+    }
     if (!newPromptContent.trim()) {
       setNewPromptContent(TEMPLATE_SYSTEM_PROMPT_TEMPLATE);
       setAiGenerationError(null);
@@ -141,11 +163,11 @@ export function OptionsPanel({
               id="system-prompt-select"
               value={selectedPromptName}
               onChange={(e) => onSelectPrompt(e.target.value)}
-              disabled={isLoading}
+              disabled={isLoading || !isUserLoggedIn}
               className="block w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
             >
               {systemPrompts.map((prompt) => (
-                <option key={prompt.name} value={prompt.name}>
+                <option key={prompt.id} value={prompt.name}>
                   {prompt.name}
                 </option>
               ))}
