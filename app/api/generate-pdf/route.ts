@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
 import { marked } from 'marked'; // Use ESM import for marked
 import path from 'path';
 import fs from 'fs/promises'; // Use promises API for async file reading
@@ -8,7 +8,14 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
-  let browser = null; // Define browser outside try block for finally clause
+  let browser = null;
+
+  const BROWSERLESS_API_KEY = process.env.BROWSERLESS_API_KEY;
+  if (!BROWSERLESS_API_KEY) {
+    console.error('Missing BROWSERLESS_API_KEY environment variable.');
+    return NextResponse.json({ error: 'Server configuration error: Missing Browserless API Key' }, { status: 500 });
+  }
+  const browserWSEndpoint = `wss://chrome.browserless.io?token=${BROWSERLESS_API_KEY}`;
 
   try {
     // 1. Get Markdown content
@@ -54,10 +61,9 @@ export async function POST(request: NextRequest) {
       </html>
     `;
 
-    // 5. Launch Puppeteer and generate PDF
-    console.log("Launching Puppeteer...");
-    // Add --no-sandbox for server environments if needed
-    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] }); 
+    // 5. Connect to Browserless.io and generate PDF
+    console.log("Connecting to Browserless.io...");
+    browser = await puppeteer.connect({ browserWSEndpoint });
     const page = await browser.newPage();
     console.log("Setting page content...");
     await page.setContent(fullHtml, { waitUntil: 'networkidle0' }); // Wait for content to load
@@ -70,10 +76,12 @@ export async function POST(request: NextRequest) {
     });
     console.log("PDF generation finished.");
 
-    // 6. Close the browser
-    await browser.close();
-    browser = null; // Ensure it's null after closing
-    console.log("Puppeteer browser closed.");
+    // 6. Close the browser connection
+    // For puppeteer.connect, typically you disconnect, not close the browser itself
+    await page.close(); // Close the page
+    await browser.disconnect(); // Disconnect from Browserless.io
+    browser = null;
+    console.log("Disconnected from Browserless.io.");
 
     // 7. Return PDF response
     return new NextResponse(pdfBuffer, {
@@ -91,10 +99,9 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
-    // Ensure browser is closed even if an error occurs mid-process
-    if (browser) {
-      console.log("Closing Puppeteer browser in finally block...");
-      await browser.close();
+    if (browser && browser.isConnected()) { // Check if browser is connected before trying to disconnect
+      console.log("Disconnecting from Browserless.io in finally block...");
+      await browser.disconnect();
     }
   }
 } 
