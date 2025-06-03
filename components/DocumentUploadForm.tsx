@@ -5,11 +5,11 @@ import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface DocumentUploadFormProps {
-  onSubmit: (formData: FormData) => void;
+  onUpload: (files: File[]) => void;
   isLoading: boolean;
 }
 
-export function DocumentUploadForm({ onSubmit, isLoading }: DocumentUploadFormProps) {
+export function DocumentUploadForm({ onUpload, isLoading }: DocumentUploadFormProps) {
   const [files, setFiles] = useState<File[]>([]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -40,12 +40,8 @@ export function DocumentUploadForm({ onSubmit, isLoading }: DocumentUploadFormPr
     event.preventDefault();
     if (files.length === 0 || isLoading) return;
 
-    const formData = new FormData();
-    files.forEach((file) => {
-      formData.append('files', file); // Key must match server action expectation
-    });
-    onSubmit(formData);
-    // Optionally clear files after submission: setFiles([]);
+    onUpload(files);
+    setFiles([]); // Clear files from the UI after initiating the upload process
   };
 
   return (
@@ -83,7 +79,7 @@ export function DocumentUploadForm({ onSubmit, isLoading }: DocumentUploadFormPr
             <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400 space-y-1 max-h-40 overflow-y-auto pr-2">
               {files.map((file, index) => (
                 <motion.li
-                    key={`${file.name}-${index}`} // Use index for potential duplicates
+                    key={`${file.name}-${index}`}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 10 }}

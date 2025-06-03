@@ -148,6 +148,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [optionalUserInput, setOptionalUserInput] = useState<string>("");
   const [totalFilesToProcess, setTotalFilesToProcess] = useState<number>(0);
+  const [filesToUpload, setFilesToUpload] = useState<File[]>([]); // New state for files from DocumentUploadForm
   const [currentFileIndex, setCurrentFileIndex] = useState<number>(0);
   const [currentFileName, setCurrentFileName] = useState<string>("");
   const [currentStatusMessage, setCurrentStatusMessage] = useState<string | null>(null);
@@ -205,35 +206,100 @@ export default function Home() {
     // Re-fetch if session changes (e.g. login/logout)
   }, [session, sessionStatus]);
 
-  const handleUpload = async (formData: FormData) => {
-    const files = formData.getAll("files") as File[];
-    if (files.length === 0) return;
+  const handleUpload = async (files: File[]) => {
+    if (files.length === 0) {
+      setError("No files selected for upload.");
+      return;
+    }
 
     const currentSelectedPrompt = systemPrompts.find(p => p.name === selectedPromptName);
     if (!currentSelectedPrompt) {
       setError("No system prompt selected or found. Please select or create a prompt.");
-      setIsLoading(false);
       return;
     }
 
-    // Append systemPromptContent to formData for the SSE route to parse
-    formData.append('systemPromptContent', currentSelectedPrompt.content);
-    formData.append('optionalUserInput', optionalUserInput);
-
-    setTotalFilesToProcess(files.length);
-    setCurrentFileIndex(0);
-    setCurrentFileName(files[0]?.name || "");
-    setCurrentStatusMessage("Initiating process...");
-    setCurrentProgressPercent(0);
     setIsLoading(true);
-    setIsFinalizing(false);
     setError(null);
     setProcessedText(null);
+    setCurrentStatusMessage("Preparing to upload files...");
+    setTotalFilesToProcess(files.length);
+    setCurrentProgressPercent(0);
+    setIsFinalizing(false);
+
+    const uploadedFileUrls: string[] = [];
+    const originalFileNames: string[] = [];
+
+    // Step 1: Upload each file to Azure Blob Storage
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setCurrentFileIndex(i);
+      setCurrentFileName(file.name);
+      setCurrentStatusMessage(`(${i + 1}/${files.length}) Requesting upload URL for ${file.name}...`);
+      setCurrentProgressPercent(0); // Reset progress for SAS URL step
+
+      try {
+        // 1a. Get SAS URL
+        const sasResponse = await fetch('/api/generate-upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name, fileType: file.type }),
+        });
+
+        if (!sasResponse.ok) {
+          const errorData = await sasResponse.json();
+          throw new Error(errorData.error || `Failed to get upload URL for ${file.name}`);
+        }
+        const { uploadUrl, blobAccessUrl } = await sasResponse.json();
+
+        // 1b. Upload file to SAS URL
+        setCurrentStatusMessage(`(${i + 1}/${files.length}) Uploading ${file.name} to Azure...`);
+        // Note: For large files, you might want to track upload progress here if the browser supports it for fetch PUT.
+        // For simplicity, we are not adding granular progress for the PUT request itself.
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          body: file,
+          headers: {
+            'Content-Type': file.type,
+            'x-ms-blob-type': 'BlockBlob',
+          },
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Failed to upload ${file.name}. Status: ${uploadResponse.statusText}`);
+        }
+        
+        uploadedFileUrls.push(blobAccessUrl);
+        originalFileNames.push(file.name);
+        setCurrentProgressPercent(100); // Mark this file's Azure upload as complete
+        setCurrentStatusMessage(`(${i + 1}/${files.length}) ${file.name} uploaded successfully.`);
+
+      } catch (uploadError: any) {
+        setError(`Error with ${file.name}: ${uploadError.message}`);
+        setIsLoading(false);
+        // Optionally, decide if you want to stop all uploads on first error or allow others to proceed
+        return; // Stop on first error for now
+      }
+    }
+
+    // Step 2: All files uploaded, now call process-stream
+    setCurrentStatusMessage("All files uploaded. Starting AI analysis...");
+    setCurrentProgressPercent(0); // Reset progress for backend processing phase
+    setTotalFilesToProcess(files.length); // This might seem redundant but good for clarity for the SSE part
+    setCurrentFileIndex(0); // Reset for backend processing stages if it uses this
+    setCurrentFileName(""); // Clear current file name as backend will send its own updates
 
     try {
+      const processStreamPayload = {
+        blobAccessUrls: uploadedFileUrls,
+        originalFileNames: originalFileNames,
+        systemPromptContent: currentSelectedPrompt.content,
+        optionalUserInput: optionalUserInput,
+      };
+
       const response = await fetch('/api/process-stream', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(processStreamPayload),
       });
 
       if (!response.ok) {
@@ -255,6 +321,14 @@ export default function Home() {
         const { value, done } = await reader.read();
         if (done) {
           console.log("SSE Stream finished.");
+          // Ensure loading state is properly turned off if not already by a result/error
+          if (isLoading) {
+            setIsLoading(false);
+            // If no specific result/error message came, set a generic completion message
+            if (!processedText && !error) {
+                setCurrentStatusMessage("Processing finished.");
+            }
+          }
           break;
         }
 
@@ -268,7 +342,10 @@ export default function Home() {
                 console.log("SSE Data Received:", data);
 
                 if (data.message) setCurrentStatusMessage(data.message);
-                if (data.totalFiles !== undefined) setTotalFilesToProcess(data.totalFiles);
+                // totalFiles from SSE refers to backend processing stages, not the Azure uploads
+                if (data.totalFiles !== undefined) {
+                    // setTotalFilesToProcess(data.totalFiles); // We already set this based on selected files
+                }
                 if (data.currentFileIndex !== undefined) setCurrentFileIndex(data.currentFileIndex);
                 if (data.currentFileName !== undefined) setCurrentFileName(data.currentFileName);
                 if (data.progressPercent !== undefined) setCurrentProgressPercent(data.progressPercent);
@@ -283,24 +360,22 @@ export default function Home() {
                   setIsFinalizing(false);
                   setCurrentStatusMessage("Analysis complete.");
 
-                  // Save to request history if tokenUsage is available
                   if (data.tokenUsage && data.analysis) {
                     const newHistoryItem: RequestHistoryItem = {
                       id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
                       timestamp: new Date().toISOString(),
-                      promptName: selectedPromptName, // Assuming selectedPromptName is in scope and current
-                      fileName: files[0]?.name, // Store the name of the first file as an example
+                      promptName: selectedPromptName,
+                      fileName: originalFileNames.join(", "), // Join all file names
                       analysisSummary: data.analysis.substring(0, 100) + (data.analysis.length > 100 ? "..." : ""),
                       tokenUsage: data.tokenUsage,
                     };
-
                     try {
                       const storedHistoryJson = localStorage.getItem(LOCAL_STORAGE_REQUEST_HISTORY_KEY);
                       let currentHistory: RequestHistoryItem[] = storedHistoryJson ? JSON.parse(storedHistoryJson) : [];
-                      currentHistory.unshift(newHistoryItem); // Add new item to the beginning
-                      currentHistory = currentHistory.slice(0, MAX_HISTORY_ITEMS); // Limit history size
+                      currentHistory.unshift(newHistoryItem);
+                      currentHistory = currentHistory.slice(0, MAX_HISTORY_ITEMS);
                       localStorage.setItem(LOCAL_STORAGE_REQUEST_HISTORY_KEY, JSON.stringify(currentHistory));
-                      console.log("Request history updated with token usage:", newHistoryItem);
+                      console.log("Request history updated:", newHistoryItem);
                     } catch (lsError) {
                       console.error("Failed to save request history to localStorage:", lsError);
                     }
@@ -312,7 +387,6 @@ export default function Home() {
                   setIsFinalizing(false);
                   setCurrentStatusMessage("Processing failed.");
                 }
-
               } catch (e) {
                 console.error("Error parsing SSE JSON:", e, "Original string:", jsonString);
               }
@@ -320,14 +394,16 @@ export default function Home() {
           }
         }
       }
-    } catch (uploadError: any) {
-      console.error("SSE Connection/Processing Error:", uploadError);
-      setError(uploadError.message || "An unexpected error occurred.");
+    } catch (processError: any) {
+      console.error("SSE Connection/Processing Error:", processError);
+      setError(processError.message || "An unexpected error occurred during analysis.");
       setIsLoading(false);
       setIsFinalizing(false);
-      setCurrentStatusMessage("Connection error or critical failure.");
+      setCurrentStatusMessage("Analysis connection error or critical failure.");
     } finally {
       console.log("handleUpload finished.");
+       // Ensure loading is false if it somehow wasn't caught by specific handlers
+      if (isLoading) setIsLoading(false);
     }
   };
 
@@ -506,7 +582,7 @@ export default function Home() {
           </p>
         </div>
 
-        <DocumentUploadForm onSubmit={handleUpload} isLoading={isLoading || sessionStatus === 'loading'} />
+        <DocumentUploadForm onUpload={handleUpload} isLoading={isLoading || sessionStatus === 'loading'} />
 
         {isOptionsModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 sm:p-6">

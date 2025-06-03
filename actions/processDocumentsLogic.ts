@@ -14,6 +14,7 @@ import DocumentIntelligence, {
   AnalyzeDocumentLogicalResponse
 } from "@azure-rest/ai-document-intelligence";
 import { AzureKeyCredential } from "@azure/core-auth";
+import { BlobServiceClient } from "@azure/storage-blob";
 
 // Attempt to enable Azure SDK verbose logging
 setLogLevel("info");
@@ -88,24 +89,31 @@ function formatTableToMarkdown(table: DocumentTableOutput): string {
   return markdown + "\n";
 }
 
-export async function performDocumentProcessing( // Renamed and added callback
-  formData: FormData, 
+export async function performDocumentProcessing(
+  blobAccessUrls: string[],
+  originalFileNames: string[],
   systemPromptContent: string,
-  optionalUserInput: string, // Added: new parameter
-  sendUpdate: SendUpdateCallback // Added callback
-): Promise<{ // Return type remains similar for overall success/failure of the whole operation
+  optionalUserInput: string,
+  sendUpdate: SendUpdateCallback
+): Promise<{
   success: boolean;
-  analysis?: string; // This will now be sent via sendUpdate({type: 'result'})
-  error?: string;    // Errors also sent via sendUpdate({type: 'error'})
+  analysis?: string;
+  error?: string;
 }> {
-  sendUpdate({ type: 'status', message: 'Document processing initiated.' });
+  sendUpdate({ type: 'status', message: 'Document processing initiated using Azure Blobs.' });
 
   const docIntelEndpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT;
   const docIntelKey = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
   const openaiDeployment = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+  const storageConnectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
 
   if (!docIntelEndpoint || !docIntelKey) {
     const errorMsg = "Azure Document Intelligence credentials missing.";
+    sendUpdate({ type: 'error', error: errorMsg });
+    return { success: false, error: errorMsg };
+  }
+  if (!storageConnectionString) {
+    const errorMsg = "Azure Storage Connection String missing.";
     sendUpdate({ type: 'error', error: errorMsg });
     return { success: false, error: errorMsg };
   }
@@ -117,15 +125,18 @@ export async function performDocumentProcessing( // Renamed and added callback
      !openaiDeployment;
 
   if (missingOpenAICreds) {
-     const errorMsg = "Azure OpenAI credentials missing (Endpoint, Key, Resource Name, or Deployment Name).";
+     const errorMsg = "Azure OpenAI credentials missing.";
      sendUpdate({ type: 'error', error: errorMsg });
      return { success: false, error: errorMsg };
   }
 
-  const files = formData.getAll("files") as File[];
-
-  if (!files || files.length === 0) {
-    const errorMsg = "No files were uploaded.";
+  if (!blobAccessUrls || blobAccessUrls.length === 0) {
+    const errorMsg = "No file URLs provided.";
+    sendUpdate({ type: 'error', error: errorMsg });
+    return { success: false, error: errorMsg };
+  }
+  if (!originalFileNames || originalFileNames.length !== blobAccessUrls.length) {
+    const errorMsg = "File URLs and original file names count mismatch.";
     sendUpdate({ type: 'error', error: errorMsg });
     return { success: false, error: errorMsg };
   }
@@ -135,40 +146,70 @@ export async function performDocumentProcessing( // Renamed and added callback
     docIntelEndpoint,
     new AzureKeyCredential(docIntelKey!)
   );
+  const blobServiceClient = BlobServiceClient.fromConnectionString(storageConnectionString!);
 
   sendUpdate({ 
     type: 'status', 
     stage: 'docIntel', 
-    message: `Starting Document Intelligence for ${files.length} file(s)...`,
-    totalFiles: files.length 
+    message: `Starting Document Intelligence for ${blobAccessUrls.length} file(s) from Azure Blob Storage...`,
+    totalFiles: blobAccessUrls.length 
   });
 
   try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (let i = 0; i < blobAccessUrls.length; i++) {
+      const blobUrl = blobAccessUrls[i];
+      const originalFileName = originalFileNames[i];
+      
       sendUpdate({ 
         type: 'progress', 
         stage: 'docIntel', 
-        file: file.name, 
-        message: `Processing file ${i + 1} of ${files.length}: ${file.name}`,
+        file: originalFileName, 
+        message: `Processing file ${i + 1} of ${blobAccessUrls.length}: ${originalFileName}`,
         currentFileIndex: i,
-        totalFiles: files.length,
-        currentFileName: file.name
+        totalFiles: blobAccessUrls.length,
+        currentFileName: originalFileName
       });
 
-      const buffer = Buffer.from(await file.arrayBuffer());
+      let buffer: Buffer;
+      try {
+        sendUpdate({ 
+            type: 'progress', 
+            stage: 'docIntel', 
+            file: originalFileName, 
+            message: `Downloading ${originalFileName} from Azure Blob Storage...`
+        });
+        const blobUrlParts = new URL(blobUrl);
+        const containerNameFromUrl = blobUrlParts.pathname.split('/')[1];
+        const blobNameFromUrl = blobUrlParts.pathname.split('/').slice(2).join('/');
+        
+        const containerClient = blobServiceClient.getContainerClient(containerNameFromUrl);
+        const blobClient = containerClient.getBlobClient(blobNameFromUrl);
+        buffer = await blobClient.downloadToBuffer();
+         sendUpdate({ 
+            type: 'progress', 
+            stage: 'docIntel', 
+            file: originalFileName, 
+            message: `${originalFileName} downloaded successfully.`
+        });
+      } catch (downloadError: any) {
+        const errorDetail = `Failed to download ${originalFileName} from Azure Blob: ${downloadError.message}`;
+        sendUpdate({ type: 'error', stage: 'docIntel', file: originalFileName, message: errorDetail });
+        conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
+        continue;
+      }
+      
       const base64FileString = buffer.toString("base64");
 
-      let modelId = "prebuilt-layout"; // Simplified, was conditional before but always prebuilt-layout
+      let modelId = "prebuilt-layout";
       sendUpdate({ 
         type: 'progress', 
         stage: 'docIntel', 
-        file: file.name, 
+        file: originalFileName, 
         message: `Using '${modelId}' model. Submitting to Document Intelligence...`
       });
       
       let queryParams: AnalyzeDocumentParameters["queryParameters"] = {};
-      const fileNameLower = file.name.toLowerCase();
+      const fileNameLower = originalFileName.toLowerCase();
       const isOfficeDocument = fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.pptx') || fileNameLower.endsWith('.xlsx');
       if (!isOfficeDocument) {
         queryParams.features = ["ocr.highResolution"];
@@ -189,10 +230,10 @@ export async function performDocumentProcessing( // Renamed and added callback
         sendUpdate({ 
             type: 'error', 
             stage: 'docIntel', 
-            file: file.name, 
+            file: originalFileName, 
             message: `Error starting analysis: ${errorDetail}` 
         });
-        conciseDocumentsData += `Error processing ${file.name}: ${errorDetail}\n\n`;
+        conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
         continue;
       }
       
@@ -201,9 +242,9 @@ export async function performDocumentProcessing( // Renamed and added callback
 
       if (successResponse.status !== "202") {
          sendUpdate({ 
-            type: 'status', // Or 'warning' if we add that type
+            type: 'status', 
             stage: 'docIntel', 
-            file: file.name, 
+            file: originalFileName, 
             message: `Unexpected status ${successResponse.status} when starting analysis. Expected 202.`
         });
       }
@@ -214,10 +255,10 @@ export async function performDocumentProcessing( // Renamed and added callback
         sendUpdate({ 
             type: 'error', 
             stage: 'docIntel', 
-            file: file.name, 
+            file: originalFileName, 
             message: `Error processing: ${errorDetail}` 
         });
-        conciseDocumentsData += `Error processing ${file.name}: ${errorDetail}\n\n`;
+        conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
         continue;
       }
 
@@ -229,7 +270,7 @@ export async function performDocumentProcessing( // Renamed and added callback
       sendUpdate({ 
         type: 'progress', 
         stage: 'docIntel', 
-        file: file.name, 
+        file: originalFileName, 
         message: `Polling Document Intelligence results...`
       });
 
@@ -260,10 +301,10 @@ export async function performDocumentProcessing( // Renamed and added callback
             sendUpdate({ 
                 type: 'error', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: `Polling error: ${errorDetail}` 
             });
-            conciseDocumentsData += `Error polling for ${file.name}: ${errorDetail}\n\n`;
+            conciseDocumentsData += `Error polling for ${originalFileName}: ${errorDetail}\n\n`;
             analysisDone = true;
             break;
           }
@@ -273,10 +314,10 @@ export async function performDocumentProcessing( // Renamed and added callback
           sendUpdate({ 
             type: 'error', 
             stage: 'docIntel', 
-            file: file.name, 
+            file: originalFileName, 
             message: `Polling network/fetch error: ${fetchError.message}` 
           });
-          conciseDocumentsData += `Error polling (network/fetch) for ${file.name}: ${fetchError.message}\n\n`;
+          conciseDocumentsData += `Error polling (network/fetch) for ${originalFileName}: ${fetchError.message}\n\n`;
           analysisDone = true; 
           break;
         }
@@ -286,9 +327,9 @@ export async function performDocumentProcessing( // Renamed and added callback
               sendUpdate({ 
                 type: 'progress', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: 'Analysis successful. Extracting content.',
-                progressPercent: 100 // Indicate completion for this file's DocIntel stage
+                progressPercent: 100
               });
               result = pollResponseBody.analyzeResult;
               analysisDone = true;
@@ -297,19 +338,18 @@ export async function performDocumentProcessing( // Renamed and added callback
               sendUpdate({ 
                 type: 'error', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: errorDetail
               });
-              conciseDocumentsData += `Error processing ${file.name}: ${errorDetail}\n\n`;
+              conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
               analysisDone = true;
             } else if (["notStarted", "running", "processing"].includes(pollResponseBody.status)) {
               sendUpdate({ 
                 type: 'progress', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: `Status: ${pollResponseBody.status} (attempt ${pollIteration})`,
-                // Estimate progress within polling, e.g., based on typical time or iterations
-                progressPercent: Math.min(90, pollIteration * 10) // Example: 10% per poll up to 90%
+                progressPercent: Math.min(90, pollIteration * 10) 
               });
               await new Promise(resolve => setTimeout(resolve, 5000)); 
             } else {
@@ -317,10 +357,10 @@ export async function performDocumentProcessing( // Renamed and added callback
               sendUpdate({ 
                 type: 'error', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: errorDetail
               });
-              conciseDocumentsData += `Error processing ${file.name}: ${errorDetail}\n\n`;
+              conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
               analysisDone = true;
             }
         } else if (!analysisDone) { 
@@ -328,10 +368,10 @@ export async function performDocumentProcessing( // Renamed and added callback
             sendUpdate({ 
                 type: 'error', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: `Polling error: ${errorDetail}` 
             });
-            conciseDocumentsData += `Error polling for ${file.name}: ${errorDetail} \n\n`;
+            conciseDocumentsData += `Error polling for ${originalFileName}: ${errorDetail} \n\n`;
             analysisDone = true;
         }
       }
@@ -341,18 +381,17 @@ export async function performDocumentProcessing( // Renamed and added callback
         sendUpdate({ 
             type: 'error', 
             stage: 'docIntel', 
-            file: file.name, 
+            file: originalFileName, 
             message: errorDetail 
         });
-        conciseDocumentsData += `Error processing ${file.name}: ${errorDetail}\n\n`;
+        conciseDocumentsData += `Error processing ${originalFileName}: ${errorDetail}\n\n`;
       }
 
       if (result) {
-        // Consolidate content extraction logic
         let combinedPageContent = "";
-        if (result.content) { // Prefer result.content if available (usually for non-Office)
+        if (result.content) { 
             combinedPageContent = result.content;
-        } else if (result.pages && result.pages.length > 0) { // Fallback to iterating pages (often for Office)
+        } else if (result.pages && result.pages.length > 0) { 
             for (const page of result.pages) {
               for (const line of page.lines || []) {
                 combinedPageContent += line.content + "\n";
@@ -364,10 +403,10 @@ export async function performDocumentProcessing( // Renamed and added callback
             sendUpdate({ 
                 type: 'progress', 
                 stage: 'docIntel', 
-                file: file.name, 
+                file: originalFileName, 
                 message: `Content extracted (length: ${combinedPageContent.trim().length}).`
             });
-            conciseDocumentsData += `## File: ${file.name}\n`;
+            conciseDocumentsData += `## File: ${originalFileName}\n`;
             conciseDocumentsData += `Pages: ${result.pages?.length ?? 'N/A'}\n\n`;
 
             if (result.tables && result.tables.length > 0) {
@@ -380,41 +419,36 @@ export async function performDocumentProcessing( // Renamed and added callback
             conciseDocumentsData += combinedPageContent.trim() + "\n\n"; 
             conciseDocumentsData += "---\n\n"; 
         } else {
-            const msg = `No text content extracted from ${file.name}.`;
-            sendUpdate({ type: 'status', stage: 'docIntel', file: file.name, message: msg });
-            if (!conciseDocumentsData.includes(`Error processing ${file.name}:`)) { // Avoid double error messages
+            const msg = `No text content extracted from ${originalFileName}.`;
+            sendUpdate({ type: 'status', stage: 'docIntel', file: originalFileName, message: msg });
+            if (!conciseDocumentsData.includes(`Error processing ${originalFileName}:`)) {
                 conciseDocumentsData += `${msg} The document might be empty or an unrecoverable error occurred during text extraction.\n\n---\n\n`;
             }
         }
-      } else { // Result is null, means an error likely occurred and was logged/sent
-         if (!conciseDocumentsData.includes(`Error processing ${file.name}:`)) { // Avoid double messages
-            const msg = `No result from Document Intelligence for ${file.name}.`;
-            sendUpdate({ type: 'status', stage: 'docIntel', file: file.name, message: msg });
+      } else { 
+         if (!conciseDocumentsData.includes(`Error processing ${originalFileName}:`)) {
+            const msg = `No result from Document Intelligence for ${originalFileName}.`;
+            sendUpdate({ type: 'status', stage: 'docIntel', file: originalFileName, message: msg });
             conciseDocumentsData += `${msg}\n\n---\n\n`;
          }
       }
-    } // End of files loop
+    } 
     sendUpdate({ type: 'status', stage: 'docIntel', message: 'All files processed by Document Intelligence.' });
   } catch (docIntelError: any) {
     const errorMsg = `Failed during data extraction: ${docIntelError.message || "Unknown error"}`;
     sendUpdate({ type: 'error', stage: 'docIntel', error: errorMsg });
-    // Note: The function will return here, so the final OpenAI step won't run.
-    // The SSE stream in the route handler should handle closing the stream upon promise rejection.
-    // We throw to ensure the promise from performDocumentProcessing rejects.
     throw new Error(errorMsg); 
   }
 
-  // --- Step 2: Analyze with Azure OpenAI ---
   sendUpdate({ 
     type: 'status', 
     stage: 'openai', 
     message: 'Preparing data for AI analysis...' 
   });
 
-  const fileCount = files.length;
-  const allFileNamesString = files.map(f => f.name).join(', ');
+  const fileCount = blobAccessUrls.length;
+  const allFileNamesString = originalFileNames.join(', ');
 
-  // --- Construct the Contextual Information Recap block ---
   const recapFileCount = fileCount > 0 ? fileCount.toString() : "N/A";
   const recapAllFileNames = allFileNamesString ? allFileNamesString : "N/A";
   const recapOptionalUserInput = optionalUserInput && optionalUserInput.trim() ? optionalUserInput : "N/A";
@@ -426,7 +460,6 @@ export async function performDocumentProcessing( // Renamed and added callback
 <allFileNames>${recapAllFileNames}</allFileNames>
 <optionalUserInput>${recapOptionalUserInput}</optionalUserInput>
 --- End of Contextual Information Recap ---`;
-  // --- End of recap block construction ---
   
   const analysisPrompt = `
 **Input Data:**
@@ -439,18 +472,15 @@ ${conciseDocumentsData}`;
   });
   
   try {
-    const languageModel = azure(openaiDeployment!); // Added non-null assertion as it's checked
+    const languageModel = azure(openaiDeployment!); 
     
-    // The systemPromptContent is now treated as read-only from the Prompt-Master agent.
-    // We append the contextual recap block to it.
     const finalSystemMessage = systemPromptContent + contextualRecapBlock;
 
-    // Log the length of the final system message (as a proxy for token count)
     console.log(`Final system message length: ${finalSystemMessage.length} characters`);
 
     const { text: analysisResult, usage: tokenUsage } = await generateText({
       model: languageModel,
-      system: finalSystemMessage, // Use the combined prompt + recap
+      system: finalSystemMessage, 
       prompt: analysisPrompt,
       maxTokens: 32768, 
       temperature: 0.3,
@@ -461,16 +491,14 @@ ${conciseDocumentsData}`;
       stage: 'openai', 
       message: 'AI analysis complete.' 
     });
-    // Send the final result via the callback
     sendUpdate({ type: 'result', analysis: analysisResult, tokenUsage });
-    return { success: true, analysis: analysisResult }; // Still return overall success
+    return { success: true, analysis: analysisResult };
 
   } catch (aiError: any) {
     const errorMessage = aiError.message || "Unknown AI analysis error";
     const errorDetails = aiError.cause ? JSON.stringify(aiError.cause) : '';
     const fullError = `AI analysis failed: ${errorMessage} ${errorDetails}`;
     sendUpdate({ type: 'error', stage: 'openai', error: fullError });
-    // Throw to ensure the promise from performDocumentProcessing rejects.
     throw new Error(fullError);
   }
 } 

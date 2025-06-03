@@ -6,26 +6,34 @@ import { performDocumentProcessing, StatusUpdate, SendUpdateCallback } from '@/a
 export async function POST(request: Request) {
   console.log("SSE /api/process-stream hit");
 
-  let formData: FormData;
   let systemPromptContent: string;
   let optionalUserInput: string | undefined;
+  let blobAccessUrls: string[];
+  let originalFileNames: string[]; // To store original file names for recap
 
   try {
-    formData = await request.formData();
-    systemPromptContent = formData.get('systemPromptContent') as string;
-    optionalUserInput = formData.get('optionalUserInput') as string | undefined;
+    // Expecting JSON body now
+    const requestData = await request.json();
+    systemPromptContent = requestData.systemPromptContent;
+    optionalUserInput = requestData.optionalUserInput;
+    blobAccessUrls = requestData.blobAccessUrls; // Array of Azure Blob URLs
+    originalFileNames = requestData.originalFileNames; // Array of original file names
 
     if (!systemPromptContent) {
-      // This error won't be streamed as it's before stream setup, 
-      // but good to have a server-side check.
-      console.error("SSE Error: systemPromptContent is missing from formData");
+      console.error("SSE Error: systemPromptContent is missing from request body");
       return new Response(JSON.stringify({ error: 'systemPromptContent is missing' }), { status: 400 });
     }
-    // Create a new FormData to pass to performDocumentProcessing if we want to exclude systemPromptContent from it.
-    // Or, ensure performDocumentProcessing correctly handles/ignores it.
-    // For now, we assume performDocumentProcessing correctly extracts only 'files'.
+    if (!blobAccessUrls || !Array.isArray(blobAccessUrls) || blobAccessUrls.length === 0) {
+      console.error("SSE Error: blobAccessUrls are missing or invalid");
+      return new Response(JSON.stringify({ error: 'blobAccessUrls are missing or invalid' }), { status: 400 });
+    }
+    if (!originalFileNames || !Array.isArray(originalFileNames) || originalFileNames.length !== blobAccessUrls.length) {
+      console.error("SSE Error: originalFileNames are missing or do not match blobAccessUrls count");
+      return new Response(JSON.stringify({ error: 'originalFileNames are missing or mismatched' }), { status: 400 });
+    }
+
   } catch (e: any) {
-    console.error("SSE Error: Failed to parse formData", e);
+    console.error("SSE Error: Failed to parse JSON request body", e);
     return new Response(JSON.stringify({ error: 'Invalid request body' }), { status: 400 });
   }
 
@@ -35,30 +43,29 @@ export async function POST(request: Request) {
         try {
             controller.enqueue(`data: ${JSON.stringify(data)}\n\n`);
         } catch (e) {
-            // This can happen if the client has disconnected
             console.warn("SSE: Failed to enqueue data, client might have disconnected.", e);
         }
       };
 
       try {
-        sendUpdate({ type: 'status', message: 'Stream connection established. Starting document processing...' });
+        sendUpdate({ type: 'status', message: 'Stream connection established. Starting document processing using Azure Blob Storage...' });
         
-        // Call the actual processing logic
-        const result = await performDocumentProcessing(formData, systemPromptContent, optionalUserInput ?? "", sendUpdate);
+        // Call the actual processing logic with blob URLs and original file names
+        const result = await performDocumentProcessing(
+          blobAccessUrls, 
+          originalFileNames, // Pass original file names
+          systemPromptContent, 
+          optionalUserInput ?? "", 
+          sendUpdate
+        );
 
         if (result.success) {
-          // The 'result' type update with analysis is already sent by performDocumentProcessing
-          // We just need to ensure the stream knows it's done.
           sendUpdate({ type: 'status', message: 'Processing completed successfully.'});
         } else {
-          // Errors should have been sent by performDocumentProcessing via sendUpdate({type: 'error'})
-          // This is a fallback or to signify the end of stream due to an error reported earlier.
           sendUpdate({ type: 'error', error: result.error || 'Processing failed after stream start.' });
         }
         
       } catch (error: any) {
-        // This catch block handles errors thrown by performDocumentProcessing itself (e.g., unhandled exceptions)
-        // or if performDocumentProcessing rejects without sending a specific error update.
         console.error("Error during performDocumentProcessing call in SSE stream:", error);
         sendUpdate({ type: 'error', error: error.message || 'An critical error occurred during processing.' });
       } finally {
@@ -72,7 +79,6 @@ export async function POST(request: Request) {
     },
     cancel() {
       console.log("SSE stream cancelled by client.");
-      // Add any cleanup logic here, e.g., signal performDocumentProcessing to stop if possible
     }
   });
 
