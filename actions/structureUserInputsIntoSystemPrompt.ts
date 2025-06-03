@@ -30,7 +30,6 @@ The final generated system prompt should incorporate the following best practice
 8.  **Hidden Scratchpad / Chain of Thought:** Include a section like "Hidden Thought Process (do NOT reveal):" or "Thought Process:" to guide the AI's internal planning. This should outline a logical series of steps the AI might take.
 9.  **Style & Rules / What Not To Do:** Include general best practices (e.g., be clear, concise, avoid jargon if the audience is non-technical) and any specific constraints or "what not to do" items derivable from the user's input.
 10. **Limits:** If the task suggests quantitative output or specific length constraints, include them.
-11. **Iterative Refinement Note:** Optionally, include a small note at the end about how the user can further refine the prompt by being more specific if the AI's output isn't perfect, referencing the steerability of modern LLMs.
 
 **Important Note on Runtime Information:**
 The system you are generating this prompt for will automatically append a section at the END of this prompt (after all your generated content) called "--- Contextual Information Recap ---". This recap section will provide the actual values for <fileCount/>, <allFileNames/>, and <optionalUserInput/>.
